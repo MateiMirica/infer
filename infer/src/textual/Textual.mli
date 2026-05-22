@@ -248,6 +248,10 @@ module Attr : sig
 
   val mk_trait : t
 
+  val ptr_rust_reference : t
+
+  val ptr_rust_mut : t
+
   val mk_plain_name : string -> t
 
   val mk_method_offset : int -> t

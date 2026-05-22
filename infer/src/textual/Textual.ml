@@ -597,6 +597,10 @@ module Attr = struct
 
   let ptr_nullable = mk "nullable *"
 
+  let ptr_rust_reference =  mk "rust_reference"
+
+  let ptr_rust_mut = mk "rust_mut"
+
   let mk_plain_name name = {name= "plain_name"; values= [name]; loc= Location.Unknown}
 
   let mk_method_offset offset =
