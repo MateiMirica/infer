@@ -39,5 +39,12 @@ define box_leak::main() : void {
       
 }
 
-declare core::mem::forget(void) : void
+define core::mem::forget(t_1: void) : void {
+  local var_0: void
+  #node_0:
+      store &var_0 <- null:void
+      n0:void = load &var_0
+      ret n0
+      
+}
 
