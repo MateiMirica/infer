@@ -224,26 +224,26 @@ let proc_name_from_binop (op : Charon.Generated_Expressions.binop) (typ : Textua
   in
   (Textual.ProcDecl.of_binop bin_op, typ)
 
-let add_borrow_mut (borrow_kind : Charon.Generated_Expressions.borrow_kind) attrs = 
+let add_borrow_mut (borrow_kind : Charon.Generated_Expressions.borrow_kind) attrs =
   match borrow_kind with
   | BMut | BTwoPhaseMut | BUniqueImmutable -> Textual.Attr.ptr_rust_mut :: attrs
-  | _ -> attrs
+  | _ -> Textual.Attr.ptr_rust_const :: attrs
 
-let add_ref_mut (ref_kind: Charon.Generated_Types.ref_kind) attrs =
+let add_ref_mut (ref_kind : Charon.Generated_Types.ref_kind) attrs =
   match ref_kind with
   | RMut -> Textual.Attr.ptr_rust_mut :: attrs
-  | _ -> attrs
+  | _ -> Textual.Attr.ptr_rust_const :: attrs
 
-let get_rvalue_ptr_attrs (rvalue : Charon.Generated_Expressions.rvalue) = 
+let get_rvalue_ptr_attrs (rvalue : Charon.Generated_Expressions.rvalue) =
   match rvalue with
-  | RawPtr (_, ref_kind, _) -> add_ref_mut ref_kind [Textual.Attr.ptr_rust_reference]
+  | RawPtr (_, ref_kind, _) -> add_ref_mut ref_kind [Textual.Attr.ptr_rust_raw]
   | RvRef (_, borrow_kind, _) -> add_borrow_mut borrow_kind [Textual.Attr.ptr_rust_reference]
   | _ -> []
 
-let get_ty_ptr_attrs (rust_ty : Charon.Generated_Types.ty) = 
-  match rust_ty with 
+let get_ty_ptr_attrs (rust_ty : Charon.Generated_Types.ty) =
+  match rust_ty with
   | TRef (_, _, ref_kind) -> add_ref_mut ref_kind [Textual.Attr.ptr_rust_reference]
-  | TRawPtr (_, ref_kind) -> add_ref_mut ref_kind []
+  | TRawPtr (_, ref_kind) -> add_ref_mut ref_kind [Textual.Attr.ptr_rust_raw]
   | _ -> []
 
 let rec mk_struct_args crate (types : Charon.Generated_Types.ty list) =

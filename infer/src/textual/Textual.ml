@@ -579,6 +579,21 @@ module Attr = struct
 
   let find_python_args {name; values} = if String.equal name "args" then Some values else None
 
+  let is_rust_reference {name; values} =
+    String.equal name "rust_pointer" && List.equal String.equal values ["reference"]
+
+
+  let is_rust_raw {name; values} =
+    String.equal name "rust_pointer" && List.equal String.equal values ["pointer"]
+
+
+  let is_rust_mut {name; values} =
+    String.equal name "rust_mut" && List.equal String.equal values ["mut"]
+
+
+  let is_rust_const {name; values} =
+    String.equal name "rust_mut" && List.equal String.equal values ["const"]
+
   let mk_async = mk "async"
 
   let mk_closure_wrapper = mk "closure_wrapper"
@@ -597,9 +612,17 @@ module Attr = struct
 
   let ptr_nullable = mk "nullable *"
 
-  let ptr_rust_reference =  mk "rust_reference"
+  let ptr_rust_reference =
+    {name= "rust_pointer"; values= ["reference"]; loc= Location.Unknown}
 
-  let ptr_rust_mut = mk "rust_mut"
+  let ptr_rust_raw =
+    {name= "rust_pointer"; values= ["pointer"]; loc= Location.Unknown}
+
+  let ptr_rust_mut =
+    {name= "rust_mut"; values= ["mut"]; loc= Location.Unknown}
+
+  let ptr_rust_const =
+    {name= "rust_mut"; values= ["const"]; loc= Location.Unknown}
 
   let mk_plain_name name = {name= "plain_name"; values= [name]; loc= Location.Unknown}
 
