@@ -41,6 +41,8 @@
    -open
    Labs
    -open
+   TreeBorrowslib
+   -open
    Ppx_yojson_conv_lib.Yojson_conv.Primitives))
  (libraries
   core
@@ -55,6 +57,7 @@
   Checkers
   Costlib
   Topllib
+  TreeBorrowslib
   Concurrency
   Labs
   Textuallib)

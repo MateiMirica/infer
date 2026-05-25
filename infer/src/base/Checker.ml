@@ -39,6 +39,7 @@ type t =
   | Starvation
   | SwiftObjCNullability
   | Topl
+  | TreeBorrows
 [@@deriving compare, equal, enumerate]
 
 type support = NoSupport | ExperimentalSupport | Support
@@ -424,6 +425,17 @@ let config_unsafe checker =
       ; cli_flags= Some {deprecated= []; show_in_help= true}
       ; enabled_by_default= false
       ; activates= [] }
+  | TreeBorrows ->
+      { id = "tree-borrows"
+      ; kind = UserFacing
+          { title = "Tree Borrows" ; markdown_body = "" }
+      ; support = mk_support_func ~rust:ExperimentalSupport ()
+      ; short_documentation =
+          "Detects undefined-behaviour under Rust's Tree Borrows aliasing \
+           discipline. Prototype, Rust-only, off by default."
+      ; cli_flags = Some { deprecated = []; show_in_help = true }
+      ; enabled_by_default = false
+      ; activates = [] }
 
 
 let sanity_check config =

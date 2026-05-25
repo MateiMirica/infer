@@ -25,6 +25,7 @@ type t =
   | Lineage
   | LineageShape
   | Starvation
+  | TreeBorrows
 [@@deriving compare, equal, hash, show, variants]
 
 let database_fields = List.map ~f:fst Variants.descriptions
@@ -64,4 +65,6 @@ let to_checker payload_id : Checker.t =
   | LineageShape ->
       LineageShape
   | Starvation ->
-      Starvation
+      Starvation  
+  | TreeBorrows ->
+      TreeBorrows

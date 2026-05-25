@@ -232,7 +232,12 @@ let all_checkers =
          let erlang_validator = intraprocedural (SilValidation.checker Language.Erlang) in
          [(java_validator, Java); (clang_validator, Clang); (erlang_validator, Erlang)] ) }
   ; { checker= SwiftObjCNullability
-    ; callbacks= [(intraprocedural SwiftObjCNullabilityChecker.checker, Swift)] } ]
+    ; callbacks= [(intraprocedural SwiftObjCNullabilityChecker.checker, Swift)] } 
+  ; { checker = TreeBorrows
+    ; callbacks =
+       (let checker = interprocedural Payloads.Fields.tree_borrows TreeBorrows.checker
+        in
+       [(checker, Rust)])}]
 
 
 let get_active_checkers () =

@@ -1030,6 +1030,13 @@ let unnecessary_copy_thrift_assignment_pulse =
 
 let unreachable_code_after = register_hidden ~id:"UNREACHABLE_CODE" Error BufferOverrunChecker
 
+let tree_borrows_ub =
+  register ~category:MemoryError ~id:"TREE_BORROWS_UB" Error TreeBorrows
+    ~user_documentation:
+      "Tree Borrows Undefined Behaviour. A pointer access (read, write, \
+       reborrow, function call or return) was performed in a way that \
+       violates Rust's Tree Borrows aliasing discipline."
+
 let use_after_delete =
   register_with_latent ~category:MemoryError ~id:"USE_AFTER_DELETE" Error Pulse
     ~user_documentation:[%blob "./documentation/issues/USE_AFTER_DELETE.md"]

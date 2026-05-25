@@ -26,6 +26,7 @@ type t =
   | Lineage
   | LineageShape
   | Starvation
+  | TreeBorrows
 [@@deriving compare, equal, hash, show, variants]
 
 val database_fields : string list

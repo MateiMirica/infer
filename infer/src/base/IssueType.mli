@@ -343,6 +343,8 @@ val unnecessary_copy_thrift_assignment_pulse : t
 
 val unreachable_code_after : t
 
+val tree_borrows_ub : t
+
 val use_after_delete : latent:bool -> t
 
 val use_after_free : latent:bool -> t
