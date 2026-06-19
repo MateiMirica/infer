@@ -32,12 +32,49 @@ module Pulse : sig
     type t = Typ.name HeapPath.Map.t [@@deriving equal, compare]
   end
 
+  module TreeBorrows : sig
+    (** Tree-Borrows specialization precondition. [perms] = (actual index,
+        permission), [rels] = (i, j, relation) for related ordered pairs. *)
+
+    module ArgIndex : sig
+      type t = private int [@@deriving equal, compare]
+
+      val of_int : int -> t
+
+      val to_int : t -> int
+
+      val pp : F.formatter -> t -> unit
+    end
+
+    module Perm : sig
+      type t = Reserved | Unique | Frozen | Disabled | ReservedConflicted
+      [@@deriving equal, compare]
+    end
+
+    module Rel : sig
+      type t = Local | Foreign [@@deriving equal, compare]
+    end
+
+    type t =
+      { perms: (ArgIndex.t * Perm.t) list
+      ; rels: (ArgIndex.t * ArgIndex.t * Rel.t) list }
+    [@@deriving equal, compare]
+
+    val bottom : t
+
+    val is_bottom : t -> bool
+  end
+
   (** currently [aliases=None] means we did not detect any alias when applying the previous summary
       and this specialization will not introduce any alias assumption.
 
       [aliases=Some []] means something went wrong... We have detected some aliases when applying
-      the last summary, but we were not able to phrase it in term of parameters equalities. *)
-  type t = {aliases: Aliases.t option; dynamic_types: DynamicTypes.t}
+      the last summary, but we were not able to phrase it in term of parameters equalities.
+
+      [tree_borrows] carries the Tree-Borrows relation+permission precondition (bottom = default,
+      unspecialized). *)
+  type t =
+    {aliases: Aliases.t option; dynamic_types: DynamicTypes.t; tree_borrows: TreeBorrows.t}
   [@@deriving equal, compare, yojson_of]
 
   val bottom : t

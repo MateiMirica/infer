@@ -243,6 +243,27 @@ let proc_name_from_binop (op : Charon.Generated_Expressions.binop) (typ : Textua
   in
   (Textual.ProcDecl.of_binop bin_op, typ)
 
+let add_borrow_mut (borrow_kind : Charon.Generated_Expressions.borrow_kind) attrs =
+  match borrow_kind with
+  | BMut | BTwoPhaseMut | BUniqueImmutable -> Textual.Attr.ptr_rust_mut :: attrs
+  | _ -> Textual.Attr.ptr_rust_const :: attrs
+
+let add_ref_mut (ref_kind : Charon.Generated_Types.ref_kind) attrs =
+  match ref_kind with
+  | RMut -> Textual.Attr.ptr_rust_mut :: attrs
+  | _ -> Textual.Attr.ptr_rust_const :: attrs
+
+let get_rvalue_ptr_attrs (rvalue : Charon.Generated_Expressions.rvalue) =
+  match rvalue with
+  | RawPtr (_, ref_kind, _) -> add_ref_mut ref_kind [Textual.Attr.ptr_rust_raw]
+  | RvRef (_, borrow_kind, _) -> add_borrow_mut borrow_kind [Textual.Attr.ptr_rust_reference]
+  | _ -> []
+
+let get_ty_ptr_attrs (rust_ty : Charon.Generated_Types.ty) =
+  match rust_ty with
+  | TRef (_, _, ref_kind) -> add_ref_mut ref_kind [Textual.Attr.ptr_rust_reference]
+  | TRawPtr (_, ref_kind) -> add_ref_mut ref_kind [Textual.Attr.ptr_rust_raw]
+  | _ -> []
 
 (* Model Unqiue<T> and NonNull<T> as *T *)
 let is_pointer_type crate (name : Charon.Generated_Types.name) =
@@ -329,7 +350,7 @@ and ty_to_textual_typ crate (rust_ty : Charon.Generated_Types.ty) : Textual.Typ.
   | TLiteral (TFloat _) ->
       Textual.Typ.Float
   | TRawPtr (ty, _) | TRef (_, ty, _) ->
-      Textual.Typ.mk_ptr (ty_to_textual_typ crate ty)
+    Textual.Typ.Ptr (ty_to_textual_typ crate ty, get_ty_ptr_attrs rust_ty)
   | TAdt type_decl_ref ->
       adt_ty_to_textual_typ crate type_decl_ref
   (* Generics *)
@@ -560,11 +581,11 @@ let mk_exp_from_rvalue ~loc crate (rvalue : Charon.Generated_Expressions.rvalue)
   | RvRef ({kind= PlaceLocal var_id; ty}, _, _metadata) ->
       let typ = ty_to_textual_typ crate ty in
       let exp = Textual.Exp.Lvar (place_map_find_id place_map var_id) in
-      (exp, Textual.Typ.mk_ptr typ)
+      (exp, Textual.Typ.Ptr (typ, get_rvalue_ptr_attrs rvalue))
   | RawPtr (place, _, _metadata) | RvRef (place, _, _metadata) ->
       let typ = ty_to_textual_typ crate place.ty in
       let exp = mk_exp_from_place ~loc crate place_map place in
-      (exp, Textual.Typ.mk_ptr typ)
+      (exp, Textual.Typ.Ptr (typ, get_rvalue_ptr_attrs rvalue))
   | Aggregate (kind, ops) -> (
       (* TODO: Handle non-empty aggregates as well *)
       let exps = List.map ~f:(fun op -> mk_exp_from_operand ~loc crate place_map op |> fst) ops in
@@ -649,7 +670,46 @@ let mk_throw_of_string message =
   Textual.Terminator.Throw (Textual.Exp.Const (Textual.Const.Str message))
 
 
-let mk_terminator (crate : Charon.UllbcAst.crate) (idx : int) (place_map : place_map_ty)
+let rust_builtin_qualified_name (name_str : string) : Textual.QualifiedProcName.t =
+  { Textual.QualifiedProcName.enclosing_class= Textual.QualifiedProcName.TopLevel
+  ; name= Textual.ProcName.of_string name_str
+  ; metadata= None }
+
+let mk_call_arg_retag ~loc (crate : Charon.UllbcAst.crate) (place_map : place_map_ty) ~(idx : int)
+    ~(argpos : int) (extra_locals : (Textual.VarName.t * Textual.Typ.annotated) list ref)
+    (operand : Charon.Generated_Expressions.operand) : Textual.Instr.t list * Textual.Exp.t =
+  let arg_exp, arg_typ = mk_exp_from_operand ~loc crate place_map operand in
+  let builtin =
+    match operand with
+    | Copy place | Move place -> (
+      match place.ty with
+      | TRef (_, _, RMut) ->
+          Some "__rust_refmut_protected"
+      | TRef (_, _, RShared) ->
+          Some "__rust_refmut_shared_protected"
+      | _ ->
+          None )
+    | Constant _ ->
+        None
+  in
+  match builtin with
+  | None ->
+      ([], arg_exp)
+  | Some builtin ->
+      let tname = Textual.VarName.of_string (Printf.sprintf "__tb_retag_%d_%d" idx argpos) in
+      let tvar = Textual.Exp.Lvar tname in
+      extra_locals := (tname, Textual.Typ.mk_without_attributes arg_typ) :: !extra_locals ;
+      let store = Textual.Instr.Store {exp1= tvar; exp2= arg_exp; loc; typ= Some arg_typ} in
+      let retag_call =
+        Textual.Exp.call_non_virtual (rust_builtin_qualified_name builtin) [tvar; arg_exp]
+      in
+      let retag = Textual.Instr.Let {id= None; exp= retag_call; loc} in
+      let passed = Textual.Exp.Load {exp= tvar; typ= Some arg_typ} in
+      ([store; retag], passed)
+
+
+let mk_terminator ~(extra_locals : (Textual.VarName.t * Textual.Typ.annotated) list ref)
+    (crate : Charon.UllbcAst.crate) (idx : int) (place_map : place_map_ty)
     (terminator : Charon.Generated_UllbcAst.terminator) :
     Textual.Node.t list * Textual.Instr.t list * Textual.Terminator.t * Textual.NodeName.t list =
   let loc = location_from_span terminator.span in
@@ -676,9 +736,12 @@ let mk_terminator (crate : Charon.UllbcAst.crate) (idx : int) (place_map : place
       let else_ = mk_jump else_block_id in
       ([], [], Textual.Terminator.If {bexp; then_; else_}, [])
   | Charon.Generated_UllbcAst.Call (call, block_id_1, on_unwind) ->
-      let args_exps, _ =
-        List.map call.args ~f:(mk_exp_from_operand ~loc crate place_map) |> List.unzip
+      let retag_instrs, args_exps =
+        List.mapi call.args ~f:(fun argpos operand ->
+            mk_call_arg_retag ~loc crate place_map ~idx ~argpos extra_locals operand )
+        |> List.unzip
       in
+      let retag_instrs = List.concat retag_instrs in
       let qualified_proc_name = fun_name_from_fun_operand crate call.func in
       let dest_typ = ty_to_textual_typ crate call.dest.ty in
       let dest_exp = mk_exp_from_place ~loc crate place_map call.dest in
@@ -688,7 +751,7 @@ let mk_terminator (crate : Charon.UllbcAst.crate) (idx : int) (place_map : place
       in
       let jmp = mk_jump block_id_1 in
       let on_unwind = mk_label (Charon.Generated_UllbcAst.BlockId.to_int on_unwind) in
-      ([], [call_instr], jmp, [on_unwind])
+      ([], retag_instrs @ [call_instr], jmp, [on_unwind])
   | Charon.Generated_UllbcAst.UnwindResume ->
       (* TODO: To be updated when error handling is being implemented *)
       ([], [], mk_throw_of_string "UnwindResume", [])
@@ -740,6 +803,24 @@ let mk_field_store_instrs_from_rvalues ~loc crate lexp enclosing_class place_map
   List.zip_with_remainder rvalues fields
   |> fst
   |> List.mapi ~f:(mk_field_store_instr_from_rvalue ~loc crate lexp enclosing_class place_map)
+
+let mk_refmut_instrs ~loc (rhs : Charon.Generated_Expressions.rvalue) ~(dst : Textual.Exp.t)
+    ~(borrowed : Textual.Exp.t) : Textual.Instr.t list =
+  match rhs with
+  | RvRef (_, borrow_kind, _) ->
+      let name =
+        match borrow_kind with
+        | BMut | BTwoPhaseMut | BUniqueImmutable ->
+            "__rust_refmut"
+        | _ ->
+            "__rust_refmut_shared"
+      in
+      let call =
+        Textual.Exp.call_non_virtual (rust_builtin_qualified_name name) [dst; borrowed]
+      in
+      [Textual.Instr.Let {id= None; exp= call; loc}]
+  | _ ->
+      []
 
 
 let mk_instr crate (place_map : place_map_ty) (statement : Charon.Generated_UllbcAst.statement) :
@@ -815,7 +896,7 @@ let mk_instr crate (place_map : place_map_ty) (statement : Charon.Generated_Ullb
       let exp1 = mk_exp_from_place ~loc crate place_map lhs in
       let exp2, typ = mk_exp_from_rvalue ~loc crate rhs place_map in
       let store_instr = Textual.Instr.Store {exp1; typ= Some typ; exp2; loc} in
-      [store_instr]
+      store_instr :: mk_refmut_instrs ~loc rhs ~dst:exp1 ~borrowed:exp2
   | StorageDead _ ->
       []
   | StorageLive _ ->
@@ -840,12 +921,15 @@ let mk_procdecl crate (proc : Charon.UllbcAst.fun_decl) : Textual.ProcDecl.t =
   {Textual.ProcDecl.qualified_name; formals_types; result_type; attributes}
 
 
-let mk_node (crate : Charon.UllbcAst.crate) (idx : int) (block : Charon.Generated_UllbcAst.block)
+let mk_node ~(extra_locals : (Textual.VarName.t * Textual.Typ.annotated) list ref)
+    (crate : Charon.UllbcAst.crate) (idx : int) (block : Charon.Generated_UllbcAst.block)
     (place_map : place_map_ty) : Textual.Node.t list =
   let label = mk_label idx in
   let ssa_parameters = [] in
   let instrs = block.statements |> List.concat_map ~f:(mk_instr crate place_map) in
-  let nodes, term_instr, last, exn_succs = mk_terminator crate idx place_map block.terminator in
+  let nodes, term_instr, last, exn_succs =
+    mk_terminator ~extra_locals crate idx place_map block.terminator
+  in
   let instrs = instrs @ term_instr in
   let last_loc = location_from_span_end block.terminator.span in
   let label_loc =
@@ -911,10 +995,13 @@ let mk_procdesc (crate : Charon.UllbcAst.crate)
   let place_map = mk_place_map locals in
   let fresh_ident = None in
   let procdecl = mk_procdecl crate fun_decl in
-  let nodes = List.mapi blocks ~f:(fun i block -> mk_node crate i block place_map) |> List.concat in
+  let extra_locals = ref [] in
+  let nodes =
+    List.mapi blocks ~f:(fun i block -> mk_node ~extra_locals crate i block place_map) |> List.concat
+  in
   let start = mk_label 0 in
   let params = params_from_fun_decl fun_decl arg_count in
-  let locals = mk_locals crate locals arg_count place_map in
+  let locals = mk_locals crate locals arg_count place_map @ List.rev !extra_locals in
   let exit_loc = location_from_span_end fun_decl.item_meta.span in
   {Textual.ProcDesc.procdecl; fresh_ident; nodes; start; params; locals; exit_loc}
 

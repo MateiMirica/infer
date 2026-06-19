@@ -28,6 +28,16 @@ let report_topl_errors {InterproceduralAnalysis.proc_desc; err_log} summary =
   List.iter ~f summary
 
 
+let report_tree_borrows_errors {InterproceduralAnalysis.proc_desc; err_log} summary =
+  let f = function
+    | ContinueProgram astate ->
+        PulseTreeBorrowsOperations.report_errors proc_desc err_log astate
+    | _ ->
+        ()
+  in
+  List.iter ~f summary
+
+
 let is_hack_async tenv pname =
   match IRAttributes.load pname with
   | None ->
@@ -202,16 +212,17 @@ module PulseTransferFunctions = struct
       | _ ->
           ResolvedCall
     in
-    let eval_args_and_call callee_pname call_exp astate non_disj =
+    let eval_args_and_call ?tb_arg_exps callee_pname call_exp astate non_disj =
       let formals_opt = get_pvar_formals callee_pname in
       let call_kind = call_kind_of call_exp in
       PulseCallOperations.call ~disjunct_limit analysis_data path call_loc ?unresolved_reason
-        callee_pname ~ret ~actuals ~formals_opt call_kind call_flags astate non_disj
+        ?tb_arg_exps callee_pname ~ret ~actuals ~formals_opt call_kind call_flags astate non_disj
     in
     match callee_pname with
     | Some callee_pname when not Config.pulse_intraprocedural_only ->
+        let tb_args = List.map func_args ~f:(fun {FuncArg.exp} -> exp) in
         let res, non_disj, _, is_known_call =
-          eval_args_and_call callee_pname call_exp astate non_disj
+          eval_args_and_call ~tb_arg_exps:tb_args callee_pname call_exp astate non_disj
         in
         (res, non_disj, is_known_call)
     | _ ->
@@ -1373,6 +1384,16 @@ module PulseTransferFunctions = struct
               PulseTransitiveAccessChecker.record_load rhs_exp loc astates
             else astates
           in
+          let astates =
+            if Config.is_checker_enabled TreeBorrows then
+              List.map astates ~f:(function
+                | ContinueProgram astate ->
+                    ContinueProgram
+                      (PulseTreeBorrowsOperations.exec_load ~id:lhs_id ~e:rhs_exp ~typ ~loc astate)
+                | other ->
+                    other )
+            else astates
+          in
           (List.take astates limit, path, non_disj)
       | Store {e1= lhs_exp; e2= rhs_exp; loc; typ} ->
           (* [*lhs_exp := rhs_exp] *)
@@ -1428,6 +1449,11 @@ module PulseTransferFunctions = struct
             let astate =
               if Topl.is_active () then
                 topl_store_step tenv path loc ~lhs:lhs_exp ~rhs:rhs_exp astate
+              else astate
+            in
+            let astate =
+              if Config.is_checker_enabled TreeBorrows then
+                PulseTreeBorrowsOperations.exec_store ~lhs:lhs_exp ~rhs:rhs_exp ~typ ~loc astate
               else astate
             in
             match lhs_exp with
@@ -1743,6 +1769,21 @@ let add_dynamic_type_on_params_with_final_type tenv {ProcAttributes.proc_name; f
   else astate
 
 
+let tree_borrows_init_formals proc_attrs specialization initial_astate =
+    if Config.is_checker_enabled TreeBorrows then
+      let tree_borrows =
+        match specialization with
+        | Some spec ->
+            spec.Specialization.Pulse.tree_borrows
+        | None ->
+            Specialization.Pulse.TreeBorrows.bottom
+      in
+      PulseTreeBorrowsOperations.init_formals
+        (ProcAttributes.get_pvar_formals proc_attrs)
+        ~tree_borrows initial_astate
+    else initial_astate
+
+
 let initial tenv proc_attrs specialization location =
   let path = PathContext.initial in
   let initial_astate =
@@ -1754,6 +1795,7 @@ let initial tenv proc_attrs specialization location =
     |> set_uninitialize_prop path tenv proc_attrs
     |> assume_notnull_params proc_attrs
     |> add_dynamic_type_on_params_with_final_type tenv proc_attrs
+    |> tree_borrows_init_formals proc_attrs specialization
   in
   [(ContinueProgram initial_astate, path)]
 
@@ -1964,6 +2006,8 @@ let analyze specialization ({InterproceduralAnalysis.tenv; proc_desc} as analysi
         if Config.pulse_transitive_access_enabled then
           PulseTransitiveAccessChecker.report_errors analysis_data summary ;
         report_topl_errors analysis_data summary.pre_post_list ;
+        if Config.is_checker_enabled TreeBorrows then
+          report_tree_borrows_errors analysis_data summary.pre_post_list ;
         if not (has_0_continue_program summary) then (
           (* Do not report unnecessary copy issue when no continue program, because it may have
              missed the statements that modify copied objects. *)

@@ -82,6 +82,7 @@ type t =
   ; path_condition: Formula.t
   ; decompiler: (Decompiler.t[@yojson.opaque] [@ignore])
   ; topl: (PulseTopl.state[@yojson.opaque])
+  ; tree_borrows: (PulseTreeBorrows.state[@yojson.opaque])
   ; need_dynamic_type_specialization: (AbstractValue.Set.t[@yojson.opaque])
   ; transitive_info: (TransitiveInfo.t[@yojson.opaque])
   ; recursive_calls: (PulseMutualRecursion.Set.t[@yojson.opaque])
@@ -99,6 +100,7 @@ let pp_ ~is_summary f
      ; need_dynamic_type_specialization
      ; transitive_info
      ; topl
+     ; tree_borrows
      ; recursive_calls
      ; loop_header_info
      ; loop_invariant_under_inference
@@ -128,16 +130,20 @@ let pp_ ~is_summary f
      loop_header_info=%a@;\
      %tunknown_values=%b@;\
      skipped_calls=%a@;\
-     Topl=%a@]"
+     Topl=%a@;\
+     TreeBorrows=%a@]"
     Formula.pp path_condition pp_pre_post pp_decompiler AbstractValue.Set.pp
     need_dynamic_type_specialization TransitiveInfo.pp transitive_info PulseMutualRecursion.Set.pp
     recursive_calls PulseLoopHeaderInfo.pp loop_header_info pp_loop_invariant_under_inference
-    unknown_values SkippedCalls.pp skipped_calls PulseTopl.pp_state topl
+    unknown_values SkippedCalls.pp skipped_calls PulseTopl.pp_state topl PulseTreeBorrows.pp_state
+    tree_borrows
 
 
 let pp = pp_ ~is_summary:false
 
 let set_path_condition path_condition astate = {astate with path_condition}
+
+let set_tree_borrows tree_borrows astate = {astate with tree_borrows}
 
 let init_loop_header_info id ({path_condition; loop_header_info} as astate) =
   let loop_header_info = PulseLoopHeaderInfo.init_loop_info id loop_header_info in
@@ -1025,12 +1031,17 @@ module Internal = struct
     AbstractValue.Set.mem v (Lazy.force stack_allocations)
 
 
-  let subst_var subst astate =
+  let subst_var ((v1, v2) as subst) astate =
     let open SatUnsat.Import in
     let* post = PostDomain.subst_var ~for_summary:false subst astate.post in
     let+ pre = PreDomain.subst_var ~for_summary:false subst astate.pre in
-    if phys_equal astate.post post && phys_equal astate.pre pre then astate
-    else {astate with pre; post}
+    let tree_borrows =
+      PulseTreeBorrows.canonicalize
+        ~f:(fun v -> if AbstractValue.equal v v1 then v2 else v)
+        astate.tree_borrows
+    in
+    if phys_equal astate.post post && phys_equal astate.pre pre then {astate with tree_borrows}
+    else {astate with pre; post; tree_borrows}
 
 
   let get_stack_allocated astate =
@@ -1202,7 +1213,8 @@ module Internal = struct
     in
     let* pre = canonicalize_pre astate.pre in
     let+ post = canonicalize_post astate.post in
-    {astate with pre; post}
+    let tree_borrows = PulseTreeBorrows.canonicalize ~f:get_var_repr astate.tree_borrows in
+    {astate with pre; post; tree_borrows}
 
 
   (** comparison between two elements of the domain to determine the [<=] relation
@@ -1548,6 +1560,7 @@ let empty =
   ; decompiler= Decompiler.empty
   ; need_dynamic_type_specialization= AbstractValue.Set.empty
   ; topl= PulseTopl.start () (* TODO: this defeats the laziness of Topl.automaton *)
+  ; tree_borrows= PulseTreeBorrows.start ()
   ; transitive_info= TransitiveInfo.bottom
   ; recursive_calls= PulseMutualRecursion.Set.empty
   ; loop_header_info= PulseLoopHeaderInfo.empty
@@ -1565,6 +1578,7 @@ let mk_join_state ~pre:(stack_pre, heap_pre, attrs_pre) ~post:(stack_post, heap_
   ; decompiler
   ; need_dynamic_type_specialization
   ; topl
+  ; tree_borrows= PulseTreeBorrows.start ()
   ; transitive_info
   ; recursive_calls
   ; loop_header_info
@@ -2223,6 +2237,8 @@ module Summary = struct
   let get_path_condition {path_condition} = path_condition
 
   let get_topl {topl} = topl
+
+  let get_tree_borrows {tree_borrows} = tree_borrows
 
   let get_recursive_calls {recursive_calls} = recursive_calls
 

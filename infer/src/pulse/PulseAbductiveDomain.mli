@@ -68,6 +68,9 @@ type t = private
   ; decompiler: Decompiler.t
   ; topl: PulseTopl.state
         (** state at of the Topl monitor at the current program point, when Topl is enabled *)
+  ; tree_borrows: PulseTreeBorrows.state
+        (** Tree Borrows sub-domain state at the current program point, when the tree-borrows
+            checker is enabled *)
   ; need_dynamic_type_specialization: AbstractValue.Set.t
         (** a set of abstract values that are used as receiver of method calls in the instructions
             reached so far *)
@@ -397,6 +400,8 @@ val declare_unknown_values : t -> t
 
 val set_path_condition : Formula.t -> t -> t
 
+val set_tree_borrows : PulseTreeBorrows.state -> t -> t
+
 val init_loop_header_info : Procdesc.Node.id -> t -> t
 
 val remove_loop_header_info : Procdesc.Node.id -> t -> t
@@ -502,6 +507,8 @@ module Summary : sig
   val get_path_condition : summary -> Formula.t
 
   val get_topl : summary -> PulseTopl.state
+
+  val get_tree_borrows : summary -> PulseTreeBorrows.state
 
   val heap_paths_that_need_dynamic_type_specialization :
     summary -> AbstractValue.t Specialization.HeapPath.Map.t
