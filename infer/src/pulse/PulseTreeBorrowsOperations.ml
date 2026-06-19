@@ -16,11 +16,11 @@ let canonicalize_tb astate =
   PulseTreeBorrows.canonicalize ~f:(get_var_repr astate) astate.AbductiveDomain.tree_borrows
 
 let succs_of_heap ~get_var_repr heap av =
-  match PulseBaseMemory.find_opt av heap with
+  match UnsafeMemory.find_opt av heap with
   | None ->
       []
   | Some edges ->
-      PulseBaseMemory.Edges.fold edges ~init:[] ~f:(fun acc (access, (target, _hist)) ->
+      UnsafeMemory.Edges.fold edges ~init:[] ~f:(fun acc (access, (target, _hist)) ->
           match (access : PulseAccess.t) with
           | Dereference ->
               acc
@@ -38,11 +38,11 @@ let operand_of_exp astate exp : Operand.t =
   let get_var_repr = get_var_repr astate in
   let post = (astate.AbductiveDomain.post :> BaseDomain.t) in
   let value_of_var v =
-    Option.map (PulseBaseStack.find_opt v post.stack) ~f:(fun vo ->
+    Option.map (UnsafeStack.find_opt v post.stack) ~f:(fun vo ->
         get_var_repr (ValueOrigin.value vo) )
   in
   let field_cell parent fld =
-    Option.map (PulseBaseMemory.find_edge_opt ~get_var_repr parent (FieldAccess fld) post.heap)
+    Option.map (UnsafeMemory.find_edge_opt ~get_var_repr parent (FieldAccess fld) post.heap)
       ~f:(fun (t, _) -> get_var_repr t)
   in
   let elem_cell arr idx_exp =
@@ -63,8 +63,8 @@ let operand_of_exp astate exp : Operand.t =
       | _ ->
           false
     in
-    Option.bind (PulseBaseMemory.find_opt arr post.heap) ~f:(fun edges ->
-        PulseBaseMemory.Edges.fold edges ~init:None ~f:(fun acc (access, (target, _hist)) ->
+    Option.bind (UnsafeMemory.find_opt arr post.heap) ~f:(fun edges ->
+        UnsafeMemory.Edges.fold edges ~init:None ~f:(fun acc (access, (target, _hist)) ->
             match acc with
             | Some _ ->
                 acc
@@ -134,16 +134,16 @@ let init_formals formals ~tree_borrows astate =
   let get_var_repr = get_var_repr astate in
   let post = (astate.AbductiveDomain.post :> BaseDomain.t) in
   let cell_of pvar =
-    Option.map (PulseBaseStack.find_opt (Var.of_pvar pvar) post.stack) ~f:(fun vo ->
+    Option.map (UnsafeStack.find_opt (Var.of_pvar pvar) post.stack) ~f:(fun vo ->
         get_var_repr (fst (ValueOrigin.addr_hist vo)) )
   in
   let pointee_of pvar =
-    match PulseBaseStack.find_opt (Var.of_pvar pvar) post.stack with
+    match UnsafeStack.find_opt (Var.of_pvar pvar) post.stack with
     | None ->
         None
     | Some vo -> (
         let addr, _ = ValueOrigin.addr_hist vo in
-        match PulseBaseMemory.find_edge_opt ~get_var_repr addr Dereference post.heap with
+        match UnsafeMemory.find_edge_opt ~get_var_repr addr Dereference post.heap with
         | Some (p, _) ->
             Some (get_var_repr p)
         | None ->
@@ -178,13 +178,13 @@ let callee_entry_edges callee_summary callee_pdesc =
   let roots =
     Procdesc.get_pvar_formals callee_pdesc
     |> List.filter_map ~f:(fun (pvar, _) ->
-           match PulseBaseStack.find_opt (Var.of_pvar pvar) pre.BaseDomain.stack with
+           match UnsafeStack.find_opt (Var.of_pvar pvar) pre.BaseDomain.stack with
            | None ->
                None
            | Some vo -> (
                let addr, _ = ValueOrigin.addr_hist vo in
                match
-                 PulseBaseMemory.find_edge_opt ~get_var_repr:Fn.id addr Dereference
+                 UnsafeMemory.find_edge_opt ~get_var_repr:Fn.id addr Dereference
                    pre.BaseDomain.heap
                with
                | Some (p, _) ->
@@ -222,7 +222,7 @@ let exec_call ~callee_summary ~callee_pdesc
   let callee_edges = callee_entry_edges callee_summary callee_pdesc in
   let callee_ret_cell =
     let post = AbductiveDomain.Summary.get_post callee_summary in
-    PulseBaseStack.find_opt (Var.of_pvar (Procdesc.get_ret_var callee_pdesc)) post.BaseDomain.stack
+    UnsafeStack.find_opt (Var.of_pvar (Procdesc.get_ret_var callee_pdesc)) post.BaseDomain.stack
     |> Option.map ~f:(fun vo -> fst (ValueOrigin.addr_hist vo))
   in
   let args = List.map args ~f:(fun e -> operand_of_exp astate e) in

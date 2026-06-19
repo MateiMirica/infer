@@ -7,7 +7,6 @@
 
 open! IStd
 open PulseBasicInterface
-open PulseDomainInterface
 open PulseModelsImport
 module DSL = PulseModelsDSL
 
