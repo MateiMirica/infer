@@ -896,7 +896,16 @@ let init_formals (formals : (Pvar.t * Typ.t) list)
               in
               mk (write_cover st ~tag ~perm ~borrowed_cell ~succs) d.events ) )
   in
-  mk (St.set_entry_pre d.st tree_borrows) d.events
+  let entry_pre =
+    let perms =
+      List.filter_mapi formals ~f:(fun i (pvar, _) ->
+          Option.map (Pvar.Map.find_opt pvar d.st.St.formal_tags) ~f:(fun tag ->
+              ( Specialization.Pulse.TreeBorrows.ArgIndex.of_int i
+              , perm_to_spec (St.own_perm d.st tag) ) ) )
+    in
+    {tree_borrows with Specialization.Pulse.TreeBorrows.perms}
+  in
+  mk (St.set_entry_pre d.st entry_pre) d.events
 
 let rel_of (st : St.t) a b : Rel.t =
   if Tag.equal a b then Rel.Local
@@ -992,6 +1001,31 @@ let exec_call ~(callee_state : state) ~(callee_pdesc : Procdesc.t)
       | None ->
           None
     in
+    let perm_of ct =
+      match St.own_perm callee_st ct with Perm.ReservedConflicted -> Perm.Reserved | p -> p
+    in
+    let borrowed_cell_of ct =
+      Option.bind (St.tag_info_of callee_st ct).borrowed_cell ~f:subst_or_drop
+    in
+    let materialize_chain st ~from_formal ~to_tag ~root =
+      let rec collect ct acc =
+        if Tag.equal ct from_formal then acc
+        else
+          match St.parent_of callee_st ct with
+          | Some p ->
+              collect p (ct :: acc)
+          | None ->
+              ct :: acc
+      in
+      List.fold (collect to_tag []) ~init:(st, root) ~f:(fun (st, parent) ct ->
+          let borrowed_cell = borrowed_cell_of ct in
+          let t_c, st = St.tag_fresh st ~protector:false ~borrowed_cell in
+          let st = St.set_parent st t_c (Some parent) in
+          let st =
+            match borrowed_cell with Some av -> St.set_entry st av t_c (perm_of ct) | None -> st
+          in
+          (st, t_c) )
+    in
     let d =
       let st =
         List.fold callee_edges ~init:d.st ~f:(fun st (a, b) ->
@@ -1059,52 +1093,48 @@ let exec_call ~(callee_state : state) ~(callee_pdesc : Procdesc.t)
             in
             mk st d.events ) )
     in
+
+    let d =
+      List.fold formal_to_caller ~init:d ~f:(fun (d : state) (ftag_x, _) ->
+          if is_errored d then d
+          else
+            match (St.tag_info_of callee_st ftag_x).borrowed_cell with
+            | None ->
+                d
+            | Some pointee_callee -> (
+              match AVMap.find_opt pointee_callee callee_st.St.pointer_tag with
+              | None ->
+                  d
+              | Some escaping_tag -> (
+                match deepest_formal_ancestor escaping_tag with
+                | Some (formal_anc, caller_anc) when not (Tag.equal formal_anc ftag_x) -> (
+                  match subst_or_drop pointee_callee with
+                  | Some caller_pointee ->
+                      let st, last_tag =
+                        materialize_chain d.st ~from_formal:formal_anc ~to_tag:escaping_tag
+                          ~root:caller_anc
+                      in
+                      mk (St.bind_pointer_tag st caller_pointee last_tag) d.events
+                  | None ->
+                      d )
+                | _ ->
+                    d ) ) )
+    in
     if is_errored d then d
     else
       match Option.bind callee_ret_cell ~f:(fun av -> AVMap.find_opt av callee_st.St.pointer_tag) with
       | None ->
           d
       | Some callee_ret_tag -> (
-              match deepest_formal_ancestor callee_ret_tag with
-              | None ->
-                  d
-              | Some (formal_tag, caller_arg_tag) ->
-                  let perm_of ct =
-                    match St.own_perm callee_st ct with
-                    | Perm.ReservedConflicted ->
-                        Perm.Reserved
-                    | p ->
-                        p
-                  in
-                  let borrowed_cell_of ct =
-                    Option.bind (St.tag_info_of callee_st ct).borrowed_cell ~f:(subst_or_drop)
-                  in
-                  let rec collect ct acc =
-                    if Tag.equal ct formal_tag then acc
-                    else
-                      match St.parent_of callee_st ct with
-                      | Some p ->
-                          collect p (ct :: acc)
-                      | None ->
-                          ct :: acc
-                  in
-                  let path = collect callee_ret_tag [] in
-                  let st, last_tag =
-                    List.fold path ~init:(d.st, caller_arg_tag) ~f:(fun (st, parent) ct ->
-                        let borrowed_cell = borrowed_cell_of ct in
-                        let t_c, st = St.tag_fresh st ~protector:false ~borrowed_cell in
-                        let st = St.set_parent st t_c (Some parent) in
-                        let st =
-                          match borrowed_cell with
-                          | Some av ->
-                              St.set_entry st av t_c (perm_of ct)
-                          | None ->
-                              st
-                        in
-                        (st, t_c) )
-                  in
-                  let st = St.bind_temp st ret_id last_tag in
-                  mk st d.events )
+        match deepest_formal_ancestor callee_ret_tag with
+        | None ->
+            d
+        | Some (formal_tag, caller_arg_tag) ->
+            let st, last_tag =
+              materialize_chain d.st ~from_formal:formal_tag ~to_tag:callee_ret_tag
+                ~root:caller_arg_tag
+            in
+            mk (St.bind_temp st ret_id last_tag) d.events )
 
 let canonicalize ~f (d : state) : state = {d with st= St.canonicalize_owners d.st ~f}
 
